@@ -199,32 +199,85 @@ func (enc *Encoding) AppendEncode(dst, src []byte) []byte {
 // unless included in the encoding alphabet. If src contains invalid base85 data, it will
 // return the number of bytes successfully written and CorruptInputError.
 func (enc *Encoding) Decode(dst, src []byte) (n int, err error) {
-	// filter whitespace (if not in alphabet) and validate
-	// use lazy allocation: only create filtered slice when needed
-	var filtered []byte
-	for i, c := range src {
-		if enc.padChar != NoPadding && rune(c) == enc.padChar {
-			if filtered != nil {
-				filtered = append(filtered, c)
+	if len(src) == 0 {
+		return 0, nil
+	}
+
+	var nb int
+	var digits [5]uint32
+	hasPadding := enc.padChar != NoPadding
+	padCount := 0 // tracks padding chars seen in current block
+
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+
+		// skip whitespace if not in alphabet
+		if (c == ' ' || c == '\t' || c == '\n' || c == '\r') && enc.decodeMap[c] == 0xFF {
+			continue
+		}
+
+		// padding handling
+		if hasPadding && rune(c) == enc.padChar {
+			if nb < 2 {
+				return n, CorruptInputError(i)
+			}
+			padCount++
+			if nb+padCount == 5 {
+				// block complete - decode and reset
+				n += decodePartial(dst[n:], digits[:], nb)
+				nb = 0
+				padCount = 0
 			}
 			continue
-		} else if (c == ' ' || c == '\t' || c == '\n' || c == '\r') && enc.decodeMap[c] == 0xFF {
-			if filtered == nil {
-				filtered = make([]byte, i, len(src))
-				copy(filtered, src[:i])
-			}
-			continue
-		} else if enc.decodeMap[c] == 0xFF {
-			return 0, CorruptInputError(i)
-		} else if filtered != nil {
-			filtered = append(filtered, c)
+		}
+
+		// data char after padding started is an error
+		if padCount > 0 {
+			return n, CorruptInputError(i)
+		}
+
+		d := enc.decodeMap[c]
+		if d == 0xFF {
+			return n, CorruptInputError(i)
+		}
+
+		digits[nb] = uint32(d)
+		nb++
+
+		if nb == 5 {
+			val := digits[0]*pow85_4 + digits[1]*pow85_3 + digits[2]*pow85_2 + digits[3]*pow85_1 + digits[4]
+			dst[n] = byte(val >> 24)
+			dst[n+1] = byte(val >> 16)
+			dst[n+2] = byte(val >> 8)
+			dst[n+3] = byte(val)
+			n += 4
+			nb = 0
 		}
 	}
 
-	if filtered == nil {
-		return enc.decodeFiltered(dst, src)
+	// handle remaining digits (unpadded case)
+	if nb > 0 {
+		if nb == 1 || padCount > 0 {
+			return n, CorruptInputError(len(src))
+		}
+		n += decodePartial(dst[n:], digits[:], nb)
 	}
-	return enc.decodeFiltered(dst, filtered)
+
+	return n, nil
+}
+
+// decodePartial decodes 2-4 accumulated digit values into output bytes.
+func decodePartial(dst []byte, digits []uint32, nb int) int {
+	// fill remaining with 84 (highest digit) for implicit padding
+	for i := nb; i < 5; i++ {
+		digits[i] = 84
+	}
+	val := digits[0]*pow85_4 + digits[1]*pow85_3 + digits[2]*pow85_2 + digits[3]*pow85_1 + digits[4]
+	for i := 0; i < nb-1; i++ {
+		dst[i] = byte(val >> 24)
+		val <<= 8
+	}
+	return nb - 1
 }
 
 // decodeBlock decodes 2-5 base85 alphabet bytes into 1-4 output bytes.

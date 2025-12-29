@@ -610,6 +610,23 @@ func (r *whitespaceOnlyReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// whitespaceWithErrorReader returns whitespace with a non-EOF error on first read.
+type whitespaceWithErrorReader struct {
+	called bool
+	err    error
+}
+
+func (r *whitespaceWithErrorReader) Read(p []byte) (int, error) {
+	if r.called {
+		return 0, r.err
+	}
+	r.called = true
+	// return whitespace that filters to empty, with error
+	data := []byte("   \t\n\r   ")
+	n := copy(p, data)
+	return n, r.err
+}
+
 func TestStreamDecoderReadError(t *testing.T) {
 	t.Parallel()
 
@@ -629,6 +646,16 @@ func TestStreamDecoderReadError(t *testing.T) {
 	t.Run("error_after_whitespace_only", func(t *testing.T) {
 		// reader returns only whitespace (filtered to empty) then error
 		r := &whitespaceOnlyReader{err: io.ErrUnexpectedEOF}
+		decoder := NewDecoder(RFC1924, r)
+
+		buf := make([]byte, 100)
+		_, err := decoder.Read(buf)
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	})
+
+	t.Run("whitespace_with_error_not_eof", func(t *testing.T) {
+		// reader returns whitespace with error in same read (filters to empty, not EOF)
+		r := &whitespaceWithErrorReader{err: io.ErrUnexpectedEOF}
 		decoder := NewDecoder(RFC1924, r)
 
 		buf := make([]byte, 100)
@@ -944,6 +971,46 @@ func TestPaddedDecoding(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, []byte{0x42, 0x43}, decoded)
+	})
+
+	// stream decoder tests for decodeFiltered error paths
+	t.Run("stream_dataLen_zero", func(t *testing.T) {
+		// "....." has 0 data chars - triggers dataLen < 2 check
+		decoder := NewDecoder(paddedEnc, bytes.NewReader([]byte(".....")))
+		_, err := io.ReadAll(decoder)
+		assert.Error(t, err)
+	})
+
+	t.Run("stream_dataLen_one", func(t *testing.T) {
+		// "A...." has 1 data char - triggers dataLen < 2 check
+		decoder := NewDecoder(paddedEnc, bytes.NewReader([]byte("A....")))
+		_, err := io.ReadAll(decoder)
+		assert.Error(t, err)
+	})
+
+	t.Run("stream_invalid_char_in_padded_block", func(t *testing.T) {
+		// "[B..." has invalid char '[' in data portion of padded block
+		decoder := NewDecoder(paddedEnc, bytes.NewReader([]byte("[B...")))
+		_, err := io.ReadAll(decoder)
+		assert.Error(t, err)
+	})
+
+	t.Run("stream_padding_in_remainder", func(t *testing.T) {
+		// valid 5-char block followed by remainder with padding
+		valid := paddedEnc.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04}) // 5 chars
+		withPaddingRemainder := valid + "A."                              // remainder has padding
+		decoder := NewDecoder(paddedEnc, bytes.NewReader([]byte(withPaddingRemainder)))
+		_, err := io.ReadAll(decoder)
+		assert.Error(t, err)
+	})
+
+	t.Run("stream_invalid_char_in_remainder", func(t *testing.T) {
+		// valid 5-char block followed by remainder with invalid char
+		valid := RFC1924.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04}) // 5 chars
+		withInvalidRemainder := valid + "A["                            // '[' is invalid
+		decoder := NewDecoder(RFC1924, bytes.NewReader([]byte(withInvalidRemainder)))
+		_, err := io.ReadAll(decoder)
+		assert.Error(t, err)
 	})
 }
 
