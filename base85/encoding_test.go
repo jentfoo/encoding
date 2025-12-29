@@ -82,10 +82,11 @@ func TestRFC1924RoundTripWithPadding(t *testing.T) {
 func TestNewEncoding(t *testing.T) {
 	t.Parallel()
 
-	t.Run("valid_alphabet", func(t *testing.T) {
-		enc := NewEncoding(encodeRFC1924)
+	t.Run("valid_alphabets", func(t *testing.T) {
+		enc := NewEncoding(ascii85Alphabet)
 		require.NotNil(t, enc)
-		assert.Equal(t, NoPadding, enc.padChar)
+		assert.Equal(t, NoPadding, RFC1924.padChar)
+		assert.Equal(t, NoPadding, Z85.padChar)
 	})
 
 	t.Run("wrong_length", func(t *testing.T) {

@@ -12,9 +12,6 @@ const (
 
 	alphabetSize = 85
 
-	encodeRFC1924 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~"
-	encodeZ85     = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#"
-
 	// powers of 85 for decoding
 	pow85_1 = 85
 	pow85_2 = 85 * 85
@@ -24,11 +21,11 @@ const (
 
 // RFC1924 is the encoding defined in RFC 1924 for compact representation of IPv6 addresses.
 // It uses characters 0-9, A-Z, a-z, and 23 punctuation symbols,  with no padding by default.
-var RFC1924 = NewEncoding(encodeRFC1924)
+var RFC1924 = NewEncoding("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~")
 
 // Z85 is the encoding used by ZeroMQ for representing binary data as printable ASCII text.
 // It uses characters 0-9, a-z, A-Z, and 23 punctuation symbols, with no padding by default.
-var Z85 = NewEncoding(encodeZ85)
+var Z85 = NewEncoding("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#")
 
 // Encoding represents a base85 encoding/decoding scheme defined by an 85-character alphabet.
 type Encoding struct {
