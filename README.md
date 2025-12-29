@@ -1,4 +1,7 @@
-# encoding
+# go-analyze/encoding
+
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/go-analyze/encoding/blob/master/LICENSE)
+[![Tests - Main Push](https://github.com/go-analyze/encoding/actions/workflows/tests-main.yml/badge.svg)](https://github.com/go-analyze/encoding/actions/workflows/tests-main.yml)
 
 Lightweight encoding packages for niche use cases not covered by Go's standard library. These packages are useful when you need compact encodings with specific character set requirements.
 
