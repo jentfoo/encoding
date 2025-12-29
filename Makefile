@@ -1,6 +1,6 @@
 export GO111MODULE=on
 
-.PHONY: default test test-cover bench lint
+.PHONY: default test test-cover test-fuzz bench lint
 
 
 test:
@@ -8,6 +8,14 @@ test:
 
 test-cover:
 	go test -race -coverprofile=test.out ./... && go tool cover --html=test.out
+
+test-fuzz:
+	go test -fuzz='^FuzzEncode$$' -fuzztime=2m ./base85/...
+	go test -fuzz='^FuzzDecode$$' -fuzztime=2m ./base85/...
+	go test -fuzz='^FuzzEncodeWithPadding$$' -fuzztime=2m ./base85/...
+	go test -fuzz='^FuzzDecodeWithPadding$$' -fuzztime=2m ./base85/...
+	go test -fuzz='^FuzzStreamRoundTrip$$' -fuzztime=2m ./base85/...
+	go test -fuzz='^FuzzStreamRoundTripWithPadding$$' -fuzztime=2m ./base85/...
 
 bench:
 	go test --benchmem -benchtime=10s -bench='Benchmark.*' -run='^$$'
