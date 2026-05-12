@@ -519,12 +519,15 @@ func NewDecoder(enc *Encoding, r io.Reader) io.Reader {
 const maxConsecutiveEmptyReads = 100
 
 type decoder struct {
-	enc        *Encoding
-	r          io.Reader
+	enc *Encoding
+	r   io.Reader
+	// readBuf holds carryover from the prior block at [:nenc] and fresh data
+	// read into [nenc:]. Filtering rewrites in place since output is a
+	// monotonic shrink of input.
 	readBuf    [1024]byte
-	encBuf     [4]byte // buffer for incomplete encoded blocks (max 4 chars waiting for 5th)
-	nenc       int     // number of valid bytes in encBuf
-	outBuf     []byte  // buffered decoded output
+	decodeBuf  [820]byte // DecodedLen(1024) = 819
+	nenc       int       // bytes of filtered carryover at head of readBuf
+	outBuf     []byte    // buffered decoded output (sub-slice of decodeBuf)
 	err        error
 	eof        bool
 	streamPos  int64 // total bytes consumed from r (start of next read)
@@ -545,8 +548,8 @@ func (d *decoder) Read(p []byte) (n int, err error) {
 
 	// loop until we have data to return or hit EOF/error
 	for {
-		// read more encoded data
-		nr, readErr := d.r.Read(d.readBuf[:])
+		prefix := d.nenc
+		nr, readErr := d.r.Read(d.readBuf[prefix:])
 		if readErr != nil && readErr != io.EOF {
 			// store error but process any data that was read
 			d.err = readErr
@@ -572,33 +575,39 @@ func (d *decoder) Read(p []byte) (n int, err error) {
 		chunkStart := d.streamPos
 		d.streamPos += int64(nr)
 
-		// filter whitespace and padding, combine with buffered encoded data
-		filtered := make([]byte, 0, d.nenc+nr)
-		filtered = append(filtered, d.encBuf[:d.nenc]...)
-		d.nenc = 0
-		for i, c := range d.readBuf[:nr] {
+		// filter whitespace in place; carryover at [:prefix] is already filtered
+		w := prefix
+		for i := prefix; i < prefix+nr; i++ {
+			c := d.readBuf[i]
 			if d.enc.padChar != NoPadding && rune(c) == d.enc.padChar {
-				filtered = append(filtered, c)
+				d.readBuf[w] = c
+				w++
 				continue
 			} else if (c == ' ' || c == '\t' || c == '\n' || c == '\r') && d.enc.decodeMap[c] == 0xFF {
 				continue
 			} else if d.enc.decodeMap[c] == 0xFF {
-				d.err = CorruptInputError(chunkStart + int64(i))
+				d.err = CorruptInputError(chunkStart + int64(i-prefix))
 				return 0, d.err
 			}
-			filtered = append(filtered, c)
+			d.readBuf[w] = c
+			w++
 		}
 
-		// if not at EOF, buffer incomplete block for next read
+		// hold off on shifting trailing block to head until after decode,
+		// since filtered aliases readBuf and the shift destination overlaps it
+		filtered := d.readBuf[:w]
+		var remainder int
+		d.nenc = 0
 		if !d.eof {
-			remainder := len(filtered) % 5
-			if remainder > 0 {
-				d.nenc = copy(d.encBuf[:], filtered[len(filtered)-remainder:])
-				filtered = filtered[:len(filtered)-remainder]
-			}
+			remainder = w % 5
+			filtered = filtered[:w-remainder]
 		}
 
 		if len(filtered) == 0 {
+			if remainder > 0 {
+				copy(d.readBuf[:remainder], d.readBuf[w-remainder:w])
+				d.nenc = remainder
+			}
 			if d.eof {
 				if d.err == nil {
 					d.err = io.EOF
@@ -610,16 +619,23 @@ func (d *decoder) Read(p []byte) (n int, err error) {
 			continue // need more data
 		}
 
-		// decode the filtered data
-		decoded := make([]byte, d.enc.DecodedLen(len(filtered)))
-		nd, decErr := d.enc.decodeFiltered(decoded, filtered)
+		// decode into reusable buffer; outBuf below aliases decodeBuf so
+		// nothing may decode again until outBuf is drained (guarded above).
+		nd, decErr := d.enc.decodeFiltered(d.decodeBuf[:], filtered)
+
+		// safe to shift the carryover now that we're done reading filtered
+		if remainder > 0 {
+			copy(d.readBuf[:remainder], d.readBuf[w-remainder:w])
+			d.nenc = remainder
+		}
+
 		if decErr != nil {
 			// approximate offset, error lies within this read's chunk
 			d.err = CorruptInputError(chunkStart)
 			// still return what we decoded
-			n = copy(p, decoded[:nd])
+			n = copy(p, d.decodeBuf[:nd])
 			if n < nd {
-				d.outBuf = decoded[n:nd]
+				d.outBuf = d.decodeBuf[n:nd]
 			}
 			if n > 0 {
 				return n, nil // defer error until buffer drained
@@ -628,9 +644,9 @@ func (d *decoder) Read(p []byte) (n int, err error) {
 		}
 
 		// copy to output
-		n = copy(p, decoded[:nd])
+		n = copy(p, d.decodeBuf[:nd])
 		if n < nd {
-			d.outBuf = decoded[n:nd]
+			d.outBuf = d.decodeBuf[n:nd]
 		}
 		return n, nil
 	}
